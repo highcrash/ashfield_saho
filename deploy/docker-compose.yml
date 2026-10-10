@@ -1,11 +1,12 @@
-# Smart Home Estimator on a DigitalOcean Droplet (or any Linux server with Docker)
+# Smart Home Estimator on a Droplet or any Linux server with Docker (alternative to App Platform, see .do/app.yaml).
+# Uses SQLite + local files in the estimator-data volume unless DATABASE_URL / SPACES_* are set.
 #   cp deploy/.env.example deploy/.env    # then edit DOMAIN and ADMIN_PASSWORD
 #   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 services:
   app:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}      # used on the very first start only; change it later in Admin → Settings

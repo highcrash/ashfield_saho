@@ -9,40 +9,41 @@ const Core=require('../assets/js/estimate-core.js');
 
 function loadWindowFile(file){const sandbox={window:{}};vm.runInNewContext(fs.readFileSync(file,'utf8'),sandbox,{filename:file});return sandbox.window;}
 
-function insertProducts(catalog,onlyNew){
+async function insertProducts(catalog,onlyNew){
   const t=D.now();let addedCats=0,addedProds=0;
   const roomsOf={};for(const [room,ids] of Object.entries(Core.SUGGEST))ids.forEach(id=>{(roomsOf[id]=roomsOf[id]||[]).push(room);});
-  const hasCat=D.db.prepare('SELECT 1 FROM categories WHERE id=?'),hasProd=D.db.prepare('SELECT 1 FROM products WHERE id=?');
-  const maxSort=D.db.prepare('SELECT COALESCE(MAX(sort),0) m FROM products').get().m;
-  D.tx(()=>{
-    catalog.groups.forEach((g,i)=>{if(hasCat.get(g.id))return;
-      D.db.prepare('INSERT INTO categories(id,label,sort,active) VALUES(?,?,?,1)').run(g.id,g.label,(i+1)*10);addedCats++;});
-    catalog.products.forEach((p,i)=>{if(hasProd.get(p.id))return;
-      D.db.prepare(`INSERT INTO products(id,category_id,cat,name,blurb,specs,power,unit,img,code,model,price,options,variants,rooms,active,sort,updated)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`).run(
-        p.id,p.group,p.cat||'',p.name,p.blurb||'',JSON.stringify(p.specs||[]),p.power||'',JSON.stringify(p.unit||{type:'qty'}),p.img||null,
-        String(p.code||''),String(p.model||''),p.price==null?null:Math.round(p.price),
-        p.options?JSON.stringify(p.options):null,p.variants?JSON.stringify(p.variants):null,JSON.stringify(roomsOf[p.id]||[]),
-        onlyNew?Number(maxSort)+(i+1)*10:(i+1)*10,t);addedProds++;});
+  const maxSort=Number((await D.q().get('SELECT COALESCE(MAX(sort),0) AS m FROM products')).m);
+  await D.q().tx(async db=>{
+    for(const [i,g] of catalog.groups.entries()){if(await db.get('SELECT id FROM categories WHERE id=?',g.id))continue;
+      await db.run('INSERT INTO categories(id,label,sort,active) VALUES(?,?,?,1)',g.id,g.label,(i+1)*10);addedCats++;}
+    for(const [i,p] of catalog.products.entries()){if(await db.get('SELECT id FROM products WHERE id=?',p.id))continue;
+      const row={id:p.id,category_id:p.group,cat:p.cat||'',name:p.name,blurb:p.blurb||'',specs:JSON.stringify(p.specs||[]),power:p.power||'',
+        unit:JSON.stringify(p.unit||{type:'qty'}),img:p.img||null,code:String(p.code||''),model:String(p.model||''),price:p.price==null?null:Math.round(p.price),
+        options:p.options?JSON.stringify(p.options):null,variants:p.variants?JSON.stringify(p.variants):null,rooms:JSON.stringify(roomsOf[p.id]||[]),
+        active:1,sort:onlyNew?maxSort+(i+1)*10:(i+1)*10,updated:t};
+      await db.run(D.insertSql('products',row),...Object.values(row));addedProds++;}
   });
   D.bump();return {addedCats,addedProds};}
 
-function seedIfEmpty(){
-  if(D.db.prepare('SELECT COUNT(*) n FROM categories').get().n>0)return false;
+async function seedIfEmpty(){
+  if(Number((await D.q().get('SELECT COUNT(*) AS n FROM categories')).n)>0)return false;
   const cat=loadWindowFile(path.join(D.ROOT,'data','products.js')).CATALOG;
   const cfg=loadWindowFile(path.join(D.ROOT,'assets','js','config.js')).APP_CONFIG||{};
-  const r=insertProducts(cat,false);
-  for(const k of Object.keys(D.DEFAULT_SETTINGS))if(cfg[k]!==undefined)D.setSetting(k,cfg[k]);
-  D.setSetting('catLabels',Object.assign({},Core.CAT_LABEL));
+  const r=await insertProducts(cat,false);
+  for(const k of Object.keys(D.DEFAULT_SETTINGS))if(cfg[k]!==undefined)await D.setSetting(k,cfg[k]);
+  await D.setSetting('catLabels',Object.assign({},Core.CAT_LABEL));
   console.log(`  Seeded ${r.addedCats} categories and ${r.addedProds} products from data/products.js`);
   return true;}
 
 if(require.main===module){
-  const args=process.argv.slice(2);
-  if(args[0]==='--new-only'){
-    const file=path.resolve(args[1]||path.join(D.ROOT,'data','products.js'));
-    const r=insertProducts(loadWindowFile(file).CATALOG,true);
-    console.log(`Added ${r.addedCats} new categories and ${r.addedProds} new products from ${file}. Existing products were not changed.`);
-  }else if(!seedIfEmpty())console.log('The database already has products. Use --new-only to add new ones.');
+  (async()=>{
+    await D.init();const args=process.argv.slice(2);
+    if(args[0]==='--new-only'){
+      const file=path.resolve(args[1]||path.join(D.ROOT,'data','products.js'));
+      const r=await insertProducts(loadWindowFile(file).CATALOG,true);
+      console.log(`Added ${r.addedCats} new categories and ${r.addedProds} new products from ${file}. Existing products were not changed.`);
+    }else if(!await seedIfEmpty())console.log('The database already has products. Use --new-only to add new ones.');
+    await D.q().close();
+  })().catch(e=>{console.error(e.message);process.exit(1);});
 }
 module.exports={seedIfEmpty};

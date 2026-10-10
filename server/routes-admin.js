@@ -1,9 +1,10 @@
 // Admin API (all routes need the admin session cookie except login/logout/me)
 'use strict';
-const fs=require('fs'),path=require('path'),crypto=require('crypto');
+const crypto=require('crypto');
 const D=require('./db');
 const auth=require('./auth');
-const {db,HttpError}=D;
+const {HttpError}=D;
+const db=()=>D.q();
 
 const clip=(s,n)=>String(s??'').trim().slice(0,n);
 const int=(v,min,max,def)=>{const n=Math.round(Number(v));return Number.isFinite(n)?Math.min(max,Math.max(min,n)):def;};
@@ -14,9 +15,9 @@ const LOGO_PATH=/^(images|uploads\/brand)\/[\w.-]+\.(jpg|jpeg|png|webp|svg)$/;
 
 // ---------- validation ----------
 function cleanPrice(v){if(v===''||v==null)return null;const n=Number(v);if(!Number.isFinite(n)||n<0||n>1e9)throw new HttpError(400,'Price must be a positive number in BDT, or empty for "Price on request".');return Math.round(n);}
-function cleanProduct(b){
+async function cleanProduct(b){
   const name=clip(b.name,160);if(!name)throw new HttpError(400,'Product name is required.');
-  const category_id=String(b.group||'');if(!db.prepare('SELECT 1 FROM categories WHERE id=?').get(category_id))throw new HttpError(400,'Choose a category.');
+  const category_id=String(b.group||'');if(!await db().get('SELECT id FROM categories WHERE id=?',category_id))throw new HttpError(400,'Choose a category.');
   const unit=b.unit&&b.unit.type==='length'?{type:'length',step:int(b.unit.step,1,1000,1)}:{type:'qty'};
   const specs=(Array.isArray(b.specs)?b.specs:[]).map(s=>clip(s,80)).filter(Boolean).slice(0,6);
   const rooms=(Array.isArray(b.rooms)?b.rooms:[]).filter(r=>ROOMS.includes(r));
@@ -53,6 +54,7 @@ function cleanSettings(b){
 function csvCell(v){let s=String(v??'');if(/^[=@]/.test(s)||/^[+-][^\d\s]/.test(s))s="'"+s;return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
 const csv=rows=>'﻿'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
 const day=t=>t?new Date(Number(t)).toISOString().slice(0,10):'';
+const catalog=()=>D.getCatalog(true);
 
 module.exports=function({route,send,limited}){
   // ---------- session ----------
@@ -61,111 +63,114 @@ module.exports=function({route,send,limited}){
     if(limited('login:'+ip,10,15*60000))throw new HttpError(429,'Too many attempts. Try again in 15 minutes.');
     if(!auth.login(req,res,body.password))throw new HttpError(401,'Wrong password.');return {ok:true};},{open:true});
   route('POST','/api/admin/logout',(req,res)=>{auth.logout(req,res);return {ok:true};},{open:true});
-  route('POST','/api/admin/password',(req,res,{body})=>{const err=auth.changePassword(body.current,body.next);if(err)throw new HttpError(400,err);
+  route('POST','/api/admin/password',async(req,res,{body})=>{const err=await auth.changePassword(body.current,body.next);if(err)throw new HttpError(400,err);
     auth.login(req,res,body.next);return {ok:true};});
 
   // ---------- dashboard ----------
-  route('GET','/api/admin/summary',()=>{
-    const week=Date.now()-7*864e5;
+  route('GET','/api/admin/summary',async()=>{
+    const week=Date.now()-7*864e5;const one=async(s,...p)=>Number((await db().get(s,...p)).n);
     return {
       defaultPassword:auth.isDefaultPassword(),
-      byStatus:db.prepare('SELECT status,COUNT(*) n,COALESCE(SUM(total),0) value FROM projects GROUP BY status').all(),
-      newThisWeek:db.prepare('SELECT COUNT(*) n FROM projects WHERE created>?').get(week).n,
-      projects:db.prepare('SELECT COUNT(*) n FROM projects').get().n,
-      clients:db.prepare('SELECT COUNT(*) n FROM clients').get().n,
-      products:db.prepare('SELECT COUNT(*) n FROM products WHERE active=1').get().n,
-      latest:db.prepare('SELECT * FROM projects ORDER BY updated DESC LIMIT 10').all().map(r=>D.projectOut(r))};});
+      byStatus:(await db().all('SELECT status,COUNT(*) AS n,COALESCE(SUM(total),0) AS value FROM projects GROUP BY status')).map(r=>({status:r.status,n:Number(r.n),value:Number(r.value)})),
+      newThisWeek:await one('SELECT COUNT(*) AS n FROM projects WHERE created>?',week),
+      projects:await one('SELECT COUNT(*) AS n FROM projects'),
+      clients:await one('SELECT COUNT(*) AS n FROM clients'),
+      products:await one('SELECT COUNT(*) AS n FROM products WHERE active=1'),
+      latest:(await db().all('SELECT * FROM projects ORDER BY updated DESC LIMIT 10')).map(r=>D.projectOut(r))};});
 
   // ---------- settings ----------
   route('GET','/api/admin/settings',()=>D.publicSettings());
-  route('PUT','/api/admin/settings',(req,res,{body})=>{const s=cleanSettings(body);
-    if(s.company){s.company=Object.assign({},D.publicSettings().company,s.company);}
-    for(const [k,v] of Object.entries(s))D.setSetting(k,v);return D.publicSettings();});
+  route('PUT','/api/admin/settings',async(req,res,{body})=>{const s=cleanSettings(body);
+    if(s.company)s.company=Object.assign({},D.publicSettings().company,s.company);
+    for(const [k,v] of Object.entries(s))await D.setSetting(k,v);return D.publicSettings();});
 
   // ---------- catalog ----------
-  route('GET','/api/admin/catalog',()=>D.getCatalog(true));
-  route('POST','/api/admin/categories',(req,res,{body})=>{
+  route('GET','/api/admin/catalog',catalog);
+  route('POST','/api/admin/categories',async(req,res,{body})=>{
     const label=clip(body.label,60);if(!label)throw new HttpError(400,'Category name is required.');
-    let id=slug(label),i=2;while(db.prepare('SELECT 1 FROM categories WHERE id=?').get(id))id=slug(label)+'-'+(i++);
-    const sort=db.prepare('SELECT COALESCE(MAX(sort),0)+10 s FROM categories').get().s;
-    db.prepare('INSERT INTO categories(id,label,sort,active) VALUES(?,?,?,1)').run(id,label,sort);D.bump();return D.getCatalog(true);});
-  route('PUT','/api/admin/categories/:id',(req,res,{params,body})=>{
-    const c=db.prepare('SELECT * FROM categories WHERE id=?').get(params.id);if(!c)throw new HttpError(404,'Category not found.');
+    let id=slug(label),i=2;while(await db().get('SELECT id FROM categories WHERE id=?',id))id=slug(label)+'-'+(i++);
+    const sort=Number((await db().get('SELECT COALESCE(MAX(sort),0)+10 AS s FROM categories')).s);
+    await db().run('INSERT INTO categories(id,label,sort,active) VALUES(?,?,?,1)',id,label,sort);D.bump();return catalog();});
+  route('PUT','/api/admin/categories/:id',async(req,res,{params,body})=>{
+    const c=await db().get('SELECT * FROM categories WHERE id=?',params.id);if(!c)throw new HttpError(404,'Category not found.');
     const label=body.label!=null?clip(body.label,60):c.label;if(!label)throw new HttpError(400,'Category name is required.');
-    db.prepare('UPDATE categories SET label=?,active=?,sort=? WHERE id=?').run(label,body.active==null?c.active:(body.active?1:0),body.sort==null?c.sort:int(body.sort,-1e6,1e6,0),params.id);
-    D.bump();return D.getCatalog(true);});
-  route('POST','/api/admin/categories/reorder',(req,res,{body})=>{
-    const ids=Array.isArray(body.ids)?body.ids:[];D.tx(()=>ids.forEach((id,i)=>db.prepare('UPDATE categories SET sort=? WHERE id=?').run((i+1)*10,String(id))));
-    D.bump();return D.getCatalog(true);});
-  route('POST','/api/admin/products',(req,res,{body})=>{
-    const p=cleanProduct(body);let id;do{id='x-'+slug(p.name).slice(0,20)+'-'+crypto.randomBytes(2).toString('hex');}while(db.prepare('SELECT 1 FROM products WHERE id=?').get(id));
-    if(!body.sort)p.sort=db.prepare('SELECT COALESCE(MAX(sort),0)+10 s FROM products WHERE category_id=?').get(p.category_id).s;
-    const cols=Object.keys(p);db.prepare(`INSERT INTO products(id,${cols.join(',')}) VALUES(?,${cols.map(()=>'?').join(',')})`).run(id,...Object.values(p));
-    D.bump();return {id,catalog:D.getCatalog(true)};});
+    await db().run('UPDATE categories SET label=?,active=?,sort=? WHERE id=?',label,body.active==null?Number(c.active):(body.active?1:0),body.sort==null?Number(c.sort):int(body.sort,-1e6,1e6,0),params.id);
+    D.bump();return catalog();});
+  route('POST','/api/admin/categories/reorder',async(req,res,{body})=>{
+    const ids=Array.isArray(body.ids)?body.ids.map(String):[];
+    await db().tx(async t=>{for(const [i,id] of ids.entries())await t.run('UPDATE categories SET sort=? WHERE id=?',(i+1)*10,id);});
+    D.bump();return catalog();});
+  route('POST','/api/admin/products',async(req,res,{body})=>{
+    const p=await cleanProduct(body);let id;do{id='x-'+slug(p.name).slice(0,20)+'-'+crypto.randomBytes(2).toString('hex');}while(await db().get('SELECT id FROM products WHERE id=?',id));
+    if(!body.sort)p.sort=Number((await db().get('SELECT COALESCE(MAX(sort),0)+10 AS s FROM products WHERE category_id=?',p.category_id)).s);
+    const row=Object.assign({id},p);await db().run(D.insertSql('products',row),...Object.values(row));
+    D.bump();return {id,catalog:await catalog()};});
   // Product ids never change: saved budgets refer to them
-  route('PUT','/api/admin/products/:id',(req,res,{params,body})=>{
-    if(!db.prepare('SELECT 1 FROM products WHERE id=?').get(params.id))throw new HttpError(404,'Product not found.');
-    const p=cleanProduct(body);db.prepare(`UPDATE products SET ${Object.keys(p).map(k=>k+'=?').join(',')} WHERE id=?`).run(...Object.values(p),params.id);
-    D.bump();return {id:params.id,catalog:D.getCatalog(true)};});
-  route('PUT','/api/admin/products/:id/active',(req,res,{params,body})=>{
-    const r=db.prepare('UPDATE products SET active=?,updated=? WHERE id=?').run(body.active?1:0,Date.now(),params.id);
-    if(!r.changes)throw new HttpError(404,'Product not found.');D.bump();return D.getCatalog(true);});
+  route('PUT','/api/admin/products/:id',async(req,res,{params,body})=>{
+    if(!await db().get('SELECT id FROM products WHERE id=?',params.id))throw new HttpError(404,'Product not found.');
+    const p=await cleanProduct(body);await db().run(D.updateSql('products',p,'id=?'),...Object.values(p),params.id);
+    D.bump();return {id:params.id,catalog:await catalog()};});
+  route('PUT','/api/admin/products/:id/active',async(req,res,{params,body})=>{
+    const r=await db().run('UPDATE products SET active=?,updated=? WHERE id=?',body.active?1:0,Date.now(),params.id);
+    if(!r.changes)throw new HttpError(404,'Product not found.');D.bump();return catalog();});
 
   // Images arrive as data URLs, already resized in the browser (no image library needed here)
-  route('POST','/api/admin/upload',(req,res,{body})=>{
+  route('POST','/api/admin/upload',async(req,res,{body})=>{
     const m=/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.dataUrl||''));
     if(!m)throw new HttpError(400,'Upload a JPG, PNG or WebP image.');
     const buf=Buffer.from(m[2],'base64');if(buf.length>5*1024*1024)throw new HttpError(413,'Image is larger than 5 MB.');
     const magic={jpeg:b=>b[0]===0xFF&&b[1]===0xD8,png:b=>b.slice(0,4).toString('hex')==='89504e47',webp:b=>b.slice(0,4).toString()==='RIFF'&&b.slice(8,12).toString()==='WEBP'};
     if(!magic[m[1]](buf))throw new HttpError(400,'That file is not a valid image.');
     const dir=body.kind==='logo'?'brand':'products';const ext=m[1]==='jpeg'?'jpg':m[1];
-    const name=`${slug(body.name||dir)}-${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}.${ext}`;
-    fs.writeFileSync(path.join(D.UPLOADS,dir,name),buf);return {url:`uploads/${dir}/${name}`};},{limit:8*1024*1024});
+    const key=`uploads/${dir}/${slug(body.name||dir)}-${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}.${ext}`;
+    await D.files.put(key,buf,'image/'+m[1]);return {url:key};},{limit:8*1024*1024});
 
   // ---------- budgets (projects) ----------
-  route('GET','/api/admin/projects',(req,res,{query})=>{
+  route('GET','/api/admin/projects',async(req,res,{query})=>{
     const w=[],a=[];
     if(query.status&&D.STATUSES.includes(query.status)){w.push('status=?');a.push(query.status);}
     if(query.client){w.push('client_id=?');a.push(Number(query.client));}
     if(query.deleted!=='1'&&!query.client){w.push('client_deleted=0');}
-    if(query.q){const q='%'+String(query.q).trim().toLowerCase()+'%';w.push('(lower(name) LIKE ? OR lower(client_name) LIKE ? OR client_phone LIKE ? OR lower(id) LIKE ?)');a.push(q,q,q,q);}
-    return {projects:db.prepare(`SELECT * FROM projects ${w.length?'WHERE '+w.join(' AND '):''} ORDER BY updated DESC LIMIT 1000`).all(...a).map(r=>D.projectOut(r))};});
-  route('GET','/api/admin/projects/:id',(req,res,{params})=>{
-    const r=D.projectRow(params.id);if(!r)throw new HttpError(404,'Budget not found.');
-    const client=r.client_id?db.prepare('SELECT * FROM clients WHERE id=?').get(r.client_id):null;
+    if(query.q){const s='%'+String(query.q).trim().toLowerCase()+'%';w.push('(lower(name) LIKE ? OR lower(client_name) LIKE ? OR client_phone LIKE ? OR lower(id) LIKE ?)');a.push(s,s,s,s);}
+    return {projects:(await db().all(`SELECT * FROM projects ${w.length?'WHERE '+w.join(' AND '):''} ORDER BY updated DESC LIMIT 1000`,...a)).map(r=>D.projectOut(r))};});
+  route('GET','/api/admin/projects/:id',async(req,res,{params})=>{
+    const r=await D.projectRow(params.id);if(!r)throw new HttpError(404,'Budget not found.');
+    const client=r.client_id?await D.clientRow(r.client_id):null;
     return {project:D.projectOut(r,true),client};});
-  route('PUT','/api/admin/projects/:id',(req,res,{params,body})=>{const p=D.saveAdmin(params.id,body);return {ok:true,rev:p.rev,project:p};},{limit:1024*1024});
-  route('POST','/api/admin/projects/:id/reprice',(req,res,{params,body})=>({project:D.reprice(params.id,!!body.all)}));
-  route('DELETE','/api/admin/projects/:id',(req,res,{params})=>{db.prepare('DELETE FROM projects WHERE id=?').run(params.id);return {ok:true};});
+  route('PUT','/api/admin/projects/:id',async(req,res,{params,body})=>{const p=await D.saveAdmin(params.id,body);return {ok:true,rev:p.rev,project:p};},{limit:1024*1024});
+  route('POST','/api/admin/projects/:id/reprice',async(req,res,{params,body})=>({project:await D.reprice(params.id,!!body.all)}));
+  route('DELETE','/api/admin/projects/:id',async(req,res,{params})=>{await db().run('DELETE FROM projects WHERE id=?',params.id);return {ok:true};});
 
   // ---------- clients ----------
-  const CLIENT_LIST=`SELECT c.*,COUNT(p.id) projects,COALESCE(SUM(p.total),0) value,MAX(p.updated) last FROM clients c LEFT JOIN projects p ON p.client_id=c.id`;
-  route('GET','/api/admin/clients',(req,res,{query})=>{
-    const w=[],a=[];if(query.q){const q='%'+String(query.q).trim().toLowerCase()+'%';w.push('(lower(c.name) LIKE ? OR c.phone LIKE ? OR c.whatsapp LIKE ? OR lower(c.email) LIKE ? OR lower(c.address) LIKE ?)');a.push(q,q,q,q,q);}
-    return {clients:db.prepare(`${CLIENT_LIST} ${w.length?'WHERE '+w.join(' AND '):''} GROUP BY c.id ORDER BY COALESCE(MAX(p.updated),c.updated) DESC LIMIT 2000`).all(...a)};});
-  route('GET','/api/admin/clients/:id',(req,res,{params})=>{
-    const c=db.prepare('SELECT * FROM clients WHERE id=?').get(Number(params.id));if(!c)throw new HttpError(404,'Client not found.');
-    return {client:c,projects:db.prepare('SELECT * FROM projects WHERE client_id=? ORDER BY updated DESC').all(c.id).map(r=>D.projectOut(r))};});
-  route('POST','/api/admin/clients',(req,res,{body})=>({client:D.createClient(body)}));
-  route('PUT','/api/admin/clients/:id',(req,res,{params,body})=>{const c=D.updateClient(Number(params.id),body);if(!c)throw new HttpError(404,'Client not found.');return {client:c};});
-  route('DELETE','/api/admin/clients/:id',(req,res,{params})=>{db.prepare('DELETE FROM clients WHERE id=?').run(Number(params.id));return {ok:true};});
+  const CLIENT_LIST='SELECT c.*,COUNT(p.id) AS projects,COALESCE(SUM(p.total),0) AS value,MAX(p.updated) AS last FROM clients c LEFT JOIN projects p ON p.client_id=c.id';
+  const clientOut=c=>Object.assign({},c,{id:Number(c.id),projects:Number(c.projects||0),value:Number(c.value||0),last:c.last==null?null:Number(c.last),created:Number(c.created),updated:Number(c.updated)});
+  route('GET','/api/admin/clients',async(req,res,{query})=>{
+    const w=[],a=[];if(query.q){const s='%'+String(query.q).trim().toLowerCase()+'%';w.push('(lower(c.name) LIKE ? OR c.phone LIKE ? OR c.whatsapp LIKE ? OR lower(c.email) LIKE ? OR lower(c.address) LIKE ?)');a.push(s,s,s,s,s);}
+    return {clients:(await db().all(`${CLIENT_LIST} ${w.length?'WHERE '+w.join(' AND '):''} GROUP BY c.id ORDER BY COALESCE(MAX(p.updated),c.updated) DESC LIMIT 2000`,...a)).map(clientOut)};});
+  route('GET','/api/admin/clients/:id',async(req,res,{params})=>{
+    const c=await D.clientRow(Number(params.id));if(!c)throw new HttpError(404,'Client not found.');
+    return {client:clientOut(c),projects:(await db().all('SELECT * FROM projects WHERE client_id=? ORDER BY updated DESC',c.id)).map(r=>D.projectOut(r))};});
+  route('POST','/api/admin/clients',async(req,res,{body})=>({client:clientOut(await D.createClient(body))}));
+  route('PUT','/api/admin/clients/:id',async(req,res,{params,body})=>{const c=await D.updateClient(Number(params.id),body);if(!c)throw new HttpError(404,'Client not found.');return {client:clientOut(c)};});
+  route('DELETE','/api/admin/clients/:id',async(req,res,{params})=>{
+    await db().tx(async t=>{await t.run('UPDATE projects SET client_id=NULL WHERE client_id=?',Number(params.id));await t.run('DELETE FROM clients WHERE id=?',Number(params.id));});return {ok:true};});
 
   // ---------- exports ----------
-  route('GET','/api/admin/export/clients.csv',(req,res)=>{
-    const rows=db.prepare(`${CLIENT_LIST} GROUP BY c.id ORDER BY c.id`).all();
+  route('GET','/api/admin/export/clients.csv',async(req,res)=>{
+    const rows=(await db().all(`${CLIENT_LIST} GROUP BY c.id ORDER BY c.id`)).map(clientOut);
     send(res,200,csv([['Client ID','Name','Phone','WhatsApp','Email','Address / area','Best time to contact','Budgets','Total value (BDT)','Last budget','Notes','Added'],
       ...rows.map(c=>[c.id,c.name,c.phone,c.whatsapp,c.email,c.address,c.contact_time,c.projects,c.value,day(c.last),c.notes,day(c.created)])]),
       {'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="clients.csv"'});});
-  route('GET','/api/admin/export/projects.csv',(req,res)=>{
-    const rows=db.prepare('SELECT * FROM projects ORDER BY created').all();
+  route('GET','/api/admin/export/projects.csv',async(req,res)=>{
+    const rows=await db().all('SELECT * FROM projects ORDER BY created');
     send(res,200,csv([['Budget ID','Created','Updated','Status','Project','Client','Phone','WhatsApp','Email','Building','Flat','Size (sq ft)','Items','Total (BDT)','Client ID','Deleted by client','Admin notes'],
       ...rows.map(r=>{const p=D.J(r.data,{});const c=p.client||{},a=p.apt||{};
-        return [r.id,day(r.created),day(r.updated),r.status,r.name,c.name,c.phone,c.whatsapp,c.email,a.building,a.unit,a.size,r.item_count,r.total,r.client_id??'',r.client_deleted?'yes':'',r.admin_notes];})]),
+        return [r.id,day(r.created),day(r.updated),r.status,r.name,c.name,c.phone,c.whatsapp,c.email,a.building,a.unit,a.size,r.item_count,r.total,r.client_id??'',Number(r.client_deleted)?'yes':'',r.admin_notes];})]),
       {'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="budgets.csv"'});});
-  route('GET','/api/admin/backup',(req,res)=>{
-    const settings=Object.fromEntries(db.prepare("SELECT key,value FROM settings WHERE key NOT LIKE '\\_%' ESCAPE '\\'").all().map(r=>[r.key,D.J(r.value,null)]));
+  route('GET','/api/admin/backup',async(req,res)=>{
+    const settings=Object.fromEntries((await db().all("SELECT key,value FROM settings WHERE key NOT LIKE '\\_%' ESCAPE '\\'")).map(r=>[r.key,D.J(r.value,null)]));
     const out={app:'smart-home-estimator',kind:'backup',created:new Date().toISOString(),settings,
-      categories:db.prepare('SELECT * FROM categories').all(),products:db.prepare('SELECT * FROM products').all(),
-      clients:db.prepare('SELECT * FROM clients').all(),projects:db.prepare('SELECT * FROM projects').all().map(({token_hash,...r})=>r)};
+      categories:await db().all('SELECT * FROM categories'),products:await db().all('SELECT * FROM products'),
+      clients:await db().all('SELECT * FROM clients'),projects:(await db().all('SELECT * FROM projects')).map(({token_hash,...r})=>r)};
     send(res,200,JSON.stringify(out),{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="estimator-backup-${new Date().toISOString().slice(0,10)}.json"`});});
 };

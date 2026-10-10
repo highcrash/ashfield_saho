@@ -32,6 +32,8 @@ const ROOM_LABELS={whole:'Whole home (central)',foyer:'Foyer',living:'Living roo
 const RATE=127,FREIGHT=700,MARKUP=1.5;
 // Stored paths are relative to the site root; this page lives in /admin/
 const src=u=>!u?'':/^(data:|https?:|\/)/.test(u)?u:'../'+u;
+// Public estimator address: its own domain in production (set by bootstrap.js), the site root locally
+const PUBLIC_SITE=window.ESTIMATOR_PUBLIC_URL||'../';
 const S={authed:false,settings:window.APP_CONFIG||null,catalog:null,core:null};
 let V={};             // state of the current view
 let routeKey='';
@@ -93,7 +95,7 @@ function renderShell(){
   $('#app').innerHTML=`<div class="adm"><aside class="side">
     <div class="side-brand">${brandMark()}<div><b>${esc((s.company&&s.company.name)||s.appName||'Smart Home Estimator')}</b><span>Admin</span></div></div>
     <nav class="nav" aria-label="Admin">${NAV.map(([k,l,i])=>`<a href="#/${k}" data-nav="${k}" title="${l}">${ico(i)}<span>${l}</span></a>`).join('')}</nav>
-    <div class="side-foot"><a href="../" target="_blank" rel="noopener" title="View website">${ico('ext')}<span>View website</span></a><button data-act="logout" title="Sign out">${ico('out')}<span>Sign out</span></button></div>
+    <div class="side-foot"><a href="${esc(PUBLIC_SITE)}" target="_blank" rel="noopener" title="View website">${ico('ext')}<span>View website</span></a><button data-act="logout" title="Sign out">${ico('out')}<span>Sign out</span></button></div>
   </aside><main class="amain" id="main"></main></div>`;
   document.title='Admin · '+(s.appName||'Smart Home Estimator');}
 function setNav(k){$$('[data-nav]').forEach(a=>a.classList.toggle('on',a.dataset.nav===k));}
@@ -134,7 +136,7 @@ async function vDashboard(){
   const val=k=>by[k]?by[k].value:0,cnt=k=>by[k]?by[k].n:0;
   const co=S.settings.company||{};
   $('#main').innerHTML=`<div class="sec-head"><div><h2>Dashboard</h2><p>Budgets clients are building on the website, saved automatically.</p></div>
-    <div class="btns"><a class="btn" href="../" target="_blank" rel="noopener">${ico('ext')} Open estimator</a></div></div>
+    <div class="btns"><a class="btn" href="${esc(PUBLIC_SITE)}" target="_blank" rel="noopener">${ico('ext')} Open estimator</a></div></div>
     ${d.defaultPassword?`<div class="note-box" style="margin-bottom:18px;background:var(--danger-soft)">${ico('gear')}<span>You are using the default admin password. <a href="#/settings">Change it in Settings</a> before the site goes live.</span></div>`:''}
     ${!co.name?`<div class="note-box" style="margin-bottom:18px">${ico('gear')}<span>Add your company name, logo and contact details in <a href="#/settings">Settings</a>. They appear on the website and on every PDF.</span></div>`:''}
     <div class="kpis">

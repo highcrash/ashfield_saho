@@ -8,7 +8,9 @@ A website your clients use to plan a smart home room by room and download a budg
   - follow up with clients
   - manage products, prices, photos and categories
   - set your company name, logo and contact details, which appear on the website and on every PDF
-- Plain HTML, CSS and JavaScript plus a small Node.js server. It needs no npm packages, and the database is a single SQLite file.
+- Plain HTML, CSS and JavaScript plus a small Node.js server.
+- **Live:** public site at https://saho.ashfieldtech.com, admin panel at https://sadmin.ashfieldtech.com, on DigitalOcean App Platform with a managed PostgreSQL database and Spaces for photos.
+- **On your computer:** it uses a single SQLite file and a local folder instead, so you need nothing else installed.
 
 ## What's in the folder
 
@@ -23,9 +25,11 @@ assets/fonts/, assets/vendor/   fonts and the PDF library (jsPDF 2.5.1 + AutoTab
 data/products.js            starting product list; copied into the database on first start
 assets/js/config.js         starting site settings; copied into the database on first start
 images/products/            product photos that came with the catalog
-server/                     the Node.js server (no npm install needed)
-storage/                    created on first start: app.db (database), uploads/, backups/   ← back this up
-deploy/                     Docker, Docker Compose + Caddy (HTTPS), Nginx files
+server/                     the Node.js server
+storage/                    local use only: app.db (SQLite), uploads/, backups/
+Dockerfile                  the server image (App Platform and Docker)
+.do/app.yaml                DigitalOcean App Platform spec (domains, database, environment variables)
+deploy/                     Docker Compose + Caddy for a Droplet instead, Nginx file for static-only mode
 ```
 
 ## 1. Run it on your computer
@@ -34,6 +38,7 @@ You need **Node.js 22.13 or newer** (https://nodejs.org). In a terminal, from th
 
 ```
 cd server
+npm install
 npm start
 ```
 
@@ -47,52 +52,67 @@ Then open:
 - http://localhost:3000 for the estimator
 - http://localhost:3000/admin/ for the admin panel
 
-## 2. Put it online (DigitalOcean)
+## 2. Online: DigitalOcean App Platform
 
-Use a **Droplet**, not App Platform. App Platform wipes the disk on every deploy, which would delete the database and photos.
+| Part | What it is |
+|---|---|
+| App | App Platform app `ashfield-saho`, built from this GitHub repo (`highcrash/ashfield_saho`, branch `main`) using the `Dockerfile` |
+| Public site | `saho.ashfieldtech.com`: the estimator only (`/admin` and the admin API return 404 there) |
+| Admin panel | `sadmin.ashfieldtech.com`: opens the admin panel. "Edit in estimator" also runs here, using your admin session |
+| Database | Managed PostgreSQL cluster `db-postgresql-sgp1-26078`, database `defaultdb`. Tables are created on first start |
+| Files | Space `ashfiledsaho` (sgp1), folder `estimator/uploads/…`. The Space stays private; the site serves the photos itself |
 
-1. **Create a Droplet.** In DigitalOcean choose **Create → Droplets → Marketplace → Docker on Ubuntu**. The Basic plan with 1 GB RAM is enough. Add your SSH key.
-2. **Point your domain.** At your DNS provider, add an `A` record (for example `estimate.yourcompany.com`) pointing to the Droplet's IP address.
-3. **Copy this folder** to the Droplet. For example, from your computer:
-   ```
-   scp -r smart-home-estimator root@YOUR_DROPLET_IP:/opt/
-   ```
-4. **Configure and start** it on the Droplet:
-   ```
-   cd /opt/smart-home-estimator
-   cp deploy/.env.example deploy/.env
-   nano deploy/.env            # set DOMAIN and ADMIN_PASSWORD
-   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
-   ```
-   Caddy gets a free HTTPS certificate automatically. Open `https://estimate.yourcompany.com/admin/` and sign in.
+The whole setup is in `.do/app.yaml`. **Every push to `main` deploys automatically.**
 
-**Update the code later:** copy the new files over (keep `deploy/.env`), then run the same `docker compose … up -d --build` command. Your data lives in a Docker volume, so it is not touched.
+### First-time setup (control panel)
 
-**Logs:**
+1. **Spaces key.** Go to **API → Spaces Keys → Generate New Key**. Copy the key and the secret; the secret is shown once.
+2. **Create the app.** Go to **Create → Apps → GitHub**, authorise access to `highcrash/ashfield_saho`, pick branch `main` and keep "Autodeploy" on. App Platform detects the Dockerfile. Choose the Singapore region and click through to **Create Resources**. The first build may fail because settings are missing; that is fine.
+3. **Load the spec.** Open the app's **Settings → App Spec → Edit**. Replace everything with the contents of `.do/app.yaml` and **Save**. This adds:
+   - both domains (DNS records are created automatically, because ashfieldtech.com uses DigitalOcean nameservers)
+   - the database connection
+   - the environment variables
+4. **Secrets.** Open **Settings → web → Environment Variables → Edit**:
+   - Set `SPACES_KEY` and `SPACES_SECRET` to the values from step 1. Tick **Encrypt** on both.
+   - Click **Add** and create `ADMIN_PASSWORD` with your admin password. Tick **Encrypt**.
+   - Save. The app redeploys.
+5. **Check.** Under **Settings → Domains**, both domains should become *Active* (certificates take a few minutes). Then:
+   - https://saho.ashfieldtech.com/api/health shows `{"ok":true,"db":"pg","files":"spaces"}`
+   - https://sadmin.ashfieldtech.com takes you to the admin sign-in
+6. **Lock down the database.** Under **Databases → db-postgresql-sgp1-26078 → Settings → Trusted Sources**, keep only the `ashfield-saho` app. Then **reset the `doadmin` password** (Users & Databases). The app picks up the new password automatically.
+
+**Logs and redeploy:** use the app's **Runtime Logs** tab, or **Actions → Force Rebuild and Deploy**.
+
+**Backups:**
+- DigitalOcean backs up the managed database daily and keeps 7 days; you can restore to any point in that window.
+- Files in the Space are kept until deleted.
+- For your own copy, use **Admin → Settings → Your data → Full backup (JSON)**.
+
+### Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `DATABASE_URL`, `DATABASE_CA_CERT` | PostgreSQL connection and its certificate. App Platform fills both in from the attached database. Without `DATABASE_URL`, SQLite in `storage/` is used |
+| `SPACES_KEY`, `SPACES_SECRET`, `SPACES_BUCKET`, `SPACES_REGION`, `SPACES_PREFIX` | File storage in Spaces. Without them, files go to `storage/uploads/` |
+| `PUBLIC_HOST`, `ADMIN_HOST` | The two domains. Without `ADMIN_HOST`, everything is served on one address (local use) |
+| `ADMIN_PASSWORD` | First start only. Default `admin12345` |
+| `SESSION_SECRET` | Optional. Generated and stored in the database if not set |
+| `TRUST_PROXY=1` | Use the visitor IP from the proxy for rate limits |
+| `PORT` | Default 3000 |
+
+To test the Spaces key from your computer:
 ```
-docker compose -f deploy/docker-compose.yml logs -f app
+cd server
+$env:SPACES_KEY="…"; $env:SPACES_SECRET="…"; $env:SPACES_BUCKET="ashfiledsaho"; npm run check-spaces
 ```
 
-### Backups
+### Alternative: a Droplet with Docker
 
-Your data is in the Docker volume `deploy_estimator-data`: the database plus uploaded photos and logo. There are three ways to back it up:
-- **Quick:** in the admin panel, **Settings → Your data → Full backup (JSON)**. Download it now and then.
-- **Automatic:** add a nightly database copy with `crontab -e` on the Droplet. It keeps the newest 14 copies inside the volume:
-  ```
-  0 3 * * * cd /opt/smart-home-estimator && docker compose -f deploy/docker-compose.yml exec -T app node --disable-warning=ExperimentalWarning server/backup.js
-  ```
-- **Whole server:** turn on **Droplet Backups** in DigitalOcean (a small monthly cost).
-
-### Without Docker
-
-Install Node 22 on the server and run `node --disable-warning=ExperimentalWarning server/server.js` with a process manager (systemd or pm2). Put Nginx or Caddy in front for HTTPS.
-
-**Environment variables:**
-- `PORT`: default 3000
-- `STORAGE_DIR`: default `./storage`
-- `ADMIN_PASSWORD`: used on the first start only
-- `SESSION_SECRET`: optional
-- `TRUST_PROXY=1`: set this when the app runs behind a proxy
+`deploy/docker-compose.yml` runs the same image with Caddy for HTTPS on a single server, using SQLite and a Docker volume unless you add the variables above:
+```
+cp deploy/.env.example deploy/.env      # set DOMAIN, ADMIN_PASSWORD
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+```
 
 ## 3. Using the admin panel
 
@@ -130,11 +150,10 @@ npm run import-catalog
 ```
 This only **adds** products and categories whose ids are not in the database yet. It never changes products you edited in the admin panel.
 
-On Docker:
+On App Platform: commit and push the new `products.js`. Once it has deployed, open the app's **Console** tab and run:
 ```
-docker compose -f deploy/docker-compose.yml exec app node --disable-warning=ExperimentalWarning server/seed.js --new-only
+node server/seed.js --new-only
 ```
-Rebuild the image first so the new `products.js` is inside it.
 
 **Product ids are permanent:** saved budgets refer to them. The admin panel never changes an id. New products get ids such as `x-ceiling-speaker-3f2a`.
 

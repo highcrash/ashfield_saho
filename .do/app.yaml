@@ -1,0 +1,74 @@
+# DigitalOcean App Platform spec for the Smart Home Estimator.
+# Paste into: Apps → your app → Settings → App Spec → Edit (or `doctl apps create --spec .do/app.yaml`).
+# Secrets (marked type: SECRET) are entered in the control panel, never committed.
+name: ashfield-saho
+region: sgp
+
+services:
+  - name: web
+    github:
+      repo: highcrash/ashfield_saho
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /api/health
+    envs:
+      # Database: attached below as "db"; App Platform fills these in and adds the app as a trusted source
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: DATABASE_CA_CERT
+        scope: RUN_TIME
+        value: ${db.CA_CERT}
+      # Domains: public estimator and admin panel
+      - key: PUBLIC_HOST
+        value: saho.ashfieldtech.com
+      - key: ADMIN_HOST
+        value: sadmin.ashfieldtech.com
+      - key: TRUST_PROXY
+        value: "1"
+      # Files: DigitalOcean Spaces (photos, logo)
+      - key: SPACES_BUCKET
+        value: ashfiledsaho
+      - key: SPACES_REGION
+        value: sgp1
+      - key: SPACES_PREFIX
+        value: estimator/
+      - key: SPACES_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: "set-in-control-panel"
+      - key: SPACES_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: "set-in-control-panel"
+      # ADMIN_PASSWORD: add it in the control panel as an encrypted variable before the first deploy
+      # (without it the first password is admin12345). SESSION_SECRET is generated and kept in the database.
+
+ingress:
+  rules:
+    - component:
+        name: web
+      match:
+        path:
+          prefix: /
+
+domains:
+  - domain: saho.ashfieldtech.com
+    type: PRIMARY
+    zone: ashfieldtech.com
+  - domain: sadmin.ashfieldtech.com
+    type: ALIAS
+    zone: ashfieldtech.com
+
+databases:
+  - name: db
+    engine: PG
+    production: true
+    cluster_name: db-postgresql-sgp1-26078
+    db_name: defaultdb
+    db_user: doadmin

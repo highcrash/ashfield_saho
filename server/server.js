@@ -1,5 +1,7 @@
-// Smart Home Estimator server — public app + admin panel + JSON API. Node 22.13+, no npm packages.
+// Smart Home Estimator server — public app + admin panel + JSON API. Node 22.13+.
 //   PORT (3000)  ADMIN_PASSWORD (first start only)  SESSION_SECRET (optional)  STORAGE_DIR (../storage)
+//   DATABASE_URL (+ DATABASE_CA_CERT) → PostgreSQL instead of SQLite   SPACES_KEY/SECRET/BUCKET/REGION → files in Spaces
+//   PUBLIC_HOST / ADMIN_HOST → serve the public site and the admin panel on separate domains
 'use strict';
 const http=require('http'),fs=require('fs'),path=require('path'),zlib=require('zlib'),url=require('url');
 const D=require('./db');
@@ -31,7 +33,7 @@ const ipOf=req=>(process.env.TRUST_PROXY==='1'&&req.headers['x-forwarded-for']||
 const MIME={'.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json',
   '.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.woff2':'font/woff2','.ico':'image/x-icon',
   '.webmanifest':'application/manifest+json'};
-const PUBLIC_DIRS={assets:D.ROOT,data:D.ROOT,images:D.ROOT,admin:D.ROOT,uploads:D.STORAGE};
+const PUBLIC_DIRS={assets:D.ROOT,data:D.ROOT,images:D.ROOT,admin:D.ROOT};
 const ROOT_FILES=new Set(['index.html','favicon.svg','manifest.webmanifest']);
 const gzCache=new Map();
 function serveStatic(req,res,pathname){
@@ -60,10 +62,31 @@ function serveStatic(req,res,pathname){
   fs.createReadStream(file).pipe(res);return true;}
 
 // ---------- request handling ----------
+// Uploaded photos/logo: from Spaces or storage/uploads, always through this site so they stay same-origin
+const UP_MIME={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp'};
+async function serveUpload(req,res,pathname){
+  const m=/^\/uploads\/(products|brand)\/([\w.-]+)\.(jpg|jpeg|png|webp)$/.exec(pathname);if(!m)return false;
+  const key=`uploads/${m[1]}/${m[2]}.${m[3]}`;const f=await D.files.get(key);if(!f)return false;
+  const etag='"'+key.length.toString(36)+'-'+f.body.length.toString(36)+'"';
+  const h={'Content-Type':UP_MIME[m[3]],'Cache-Control':'public, max-age=31536000, immutable','ETag':etag};
+  if(req.headers['if-none-match']===etag){res.writeHead(304,h);res.end();return true;}
+  res.writeHead(200,Object.assign(h,{'Content-Length':f.body.length}));res.end(req.method==='HEAD'?undefined:f.body);return true;}
+
+// Two domains: PUBLIC_HOST shows the estimator only; ADMIN_HOST shows the admin panel (and the estimator in ?edit mode).
+// Without ADMIN_HOST everything is served on one host (local use).
+const ADMIN_HOST=(process.env.ADMIN_HOST||'').toLowerCase(),PUBLIC_HOST=(process.env.PUBLIC_HOST||'').toLowerCase();
+const PUBLIC_URL=PUBLIC_HOST?'https://'+PUBLIC_HOST+'/':'';
+const hostOf=req=>String(req.headers['x-forwarded-host']||req.headers.host||'').split(',')[0].trim().toLowerCase().replace(/:\d+$/,'');
+
 const server=http.createServer(async(req,res)=>{
   res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');res.setHeader('X-Frame-Options','SAMEORIGIN');
   const u=url.parse(req.url,true);const pathname=u.pathname||'/';
   try{
+    if(ADMIN_HOST&&pathname!=='/api/health'){
+      const onAdmin=hostOf(req)===ADMIN_HOST;
+      if(!onAdmin&&(pathname==='/admin'||pathname.startsWith('/admin/')||pathname.startsWith('/api/admin/')))return send(res,404,'Not found',{'Content-Type':'text/plain'});
+      if(onAdmin&&(pathname==='/'||pathname==='/index.html')&&!u.query.edit){res.writeHead(302,{Location:'/admin/'});return res.end();}
+    }
     if(pathname.startsWith('/api/')){
       const r=routes.find(x=>x.method===req.method&&x.re.test(pathname));
       if(!r)return send(res,404,{error:'Not found.'});
@@ -76,18 +99,25 @@ const server=http.createServer(async(req,res)=>{
       const out=await r.handler(req,res,{params,query:u.query,body,ip:ipOf(req)});
       if(out!==undefined&&!res.headersSent)send(res,200,out);
       return;}
-    if((req.method==='GET'||req.method==='HEAD')&&serveStatic(req,res,pathname))return;
+    if((req.method==='GET'||req.method==='HEAD')&&(serveStatic(req,res,pathname)||await serveUpload(req,res,pathname)))return;
     send(res,404,'Not found',{'Content-Type':'text/plain'});
   }catch(e){
     if(e instanceof D.HttpError)return send(res,e.status,{error:e.message});
     console.error(e);send(res,500,{error:'Something went wrong on the server.'});}
 });
 
-require('./routes-public')({route,send,limited});
+require('./routes-public')({route,send,limited,publicUrl:PUBLIC_URL});
 require('./routes-admin')({route,send,limited});
 
-seedIfEmpty();
-auth.ensurePassword();
-const PORT=+process.env.PORT||3000;
-server.listen(PORT,()=>console.log(`  Smart Home Estimator running on http://localhost:${PORT}  (admin: /admin/)  data: ${D.STORAGE}`));
+(async()=>{
+  await D.init();
+  await seedIfEmpty();
+  await auth.ensurePassword();
+  D.startSettingsRefresh();
+  const PORT=+process.env.PORT||3000;
+  server.listen(PORT,()=>{
+    console.log(`  Smart Home Estimator running on port ${PORT}`);
+    console.log(`  Database: ${D.q().kind==='pg'?'PostgreSQL':'SQLite '+D.STORAGE}   Files: ${D.files.kind}`);
+    console.log(ADMIN_HOST?`  Public site: ${PUBLIC_HOST||'(any other host)'}   Admin panel: ${ADMIN_HOST}`:`  Open http://localhost:${PORT}  and the admin panel at /admin/`);});
+})().catch(e=>{console.error('Startup failed:',e.message);process.exit(1);});
 module.exports=server;

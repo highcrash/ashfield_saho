@@ -14,17 +14,17 @@ function verify(pw,stored){
 
 // First start: take the password from ADMIN_PASSWORD, or use the default (the dashboard warns until it is changed).
 const DEFAULT_PASSWORD='admin12345';
-function setPassword(pw,isDefault){setSetting('_adminHash',hash(pw));setSetting('_defaultPassword',!!isDefault);setSetting('_sessionEpoch',epoch()+1);}
-function ensurePassword(){
+async function setPassword(pw,isDefault){await setSetting('_adminHash',hash(pw));await setSetting('_defaultPassword',!!isDefault);await setSetting('_sessionEpoch',epoch()+1);}
+// Startup: password from ADMIN_PASSWORD or the default, plus the session secret
+async function ensurePassword(){
+  if(!process.env.SESSION_SECRET&&!getSetting('_sessionSecret',null))await setSetting('_sessionSecret',crypto.randomBytes(32).toString('hex'));
   if(getSetting('_adminHash',null)){if(getSetting('_defaultPassword',false))console.log(`  Admin password is still the default (${DEFAULT_PASSWORD}). Change it in Admin → Settings.`);return;}
   const pw=process.env.ADMIN_PASSWORD;
-  setPassword(pw||DEFAULT_PASSWORD,!pw);
+  await setPassword(pw||DEFAULT_PASSWORD,!pw);
   console.log(pw?'  Admin password set from ADMIN_PASSWORD.':`\n  Admin password: ${DEFAULT_PASSWORD}  (default — change it in Admin → Settings)\n`);
 }
 const isDefaultPassword=()=>!!getSetting('_defaultPassword',false);
-function secret(){
-  if(process.env.SESSION_SECRET)return process.env.SESSION_SECRET;
-  let s=getSetting('_sessionSecret',null);if(!s){s=crypto.randomBytes(32).toString('hex');setSetting('_sessionSecret',s);}return s;}
+function secret(){const s=process.env.SESSION_SECRET||getSetting('_sessionSecret',null);if(!s)throw new Error('Session secret missing (ensurePassword not run)');return s;}
 // Changing the password bumps the epoch, which signs out every open session
 const epoch=()=>getSetting('_sessionEpoch',1);
 const sign=v=>crypto.createHmac('sha256',secret()).update(v).digest('base64url');
@@ -44,10 +44,10 @@ function isAdmin(req){
   const i=v.lastIndexOf('.');if(i<0)return false;const payload=v.slice(0,i),sig=v.slice(i+1);
   const want=sign(payload);if(sig.length!==want.length||!crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(want)))return false;
   const [exp,ep]=payload.split('.');return Number(exp)>Date.now()&&Number(ep)===Number(epoch());}
-function changePassword(current,next){
+async function changePassword(current,next){
   if(!verify(current||'',getSetting('_adminHash',null)))return 'The current password is wrong.';
   if(!next||String(next).length<8)return 'Use at least 8 characters for the new password.';
   if(next===DEFAULT_PASSWORD)return 'Choose a password other than the default.';
-  setPassword(next,false);return null;}
+  await setPassword(next,false);return null;}
 
 module.exports={ensurePassword,login,logout,isAdmin,changePassword,setPassword,isDefaultPassword,DEFAULT_PASSWORD};
