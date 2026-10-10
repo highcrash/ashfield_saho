@@ -59,7 +59,7 @@ Then open:
 | App | App Platform app `ashfield-saho`, built from this GitHub repo (`highcrash/ashfield_saho`, branch `main`) using the `Dockerfile` |
 | Public site | `saho.ashfieldtech.com`: the estimator only (`/admin` and the admin API return 404 there) |
 | Admin panel | `sadmin.ashfieldtech.com`: opens the admin panel. "Edit in estimator" also runs here, using your admin session |
-| Database | Managed PostgreSQL cluster `db-postgresql-sgp1-26078`, database `defaultdb`. Tables are created on first start |
+| Database | Managed PostgreSQL cluster `db-postgresql-sgp1-26078`, database `ashfield_saho`. Tables are created on first start |
 | Files | Space `ashfiledsaho` (sgp1), folder `estimator/uploads/…`. The Space stays private; the site serves the photos itself |
 
 The whole setup is in `.do/app.yaml`. **Every push to `main` deploys automatically.**

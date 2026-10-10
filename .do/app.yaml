@@ -70,5 +70,5 @@ databases:
     engine: PG
     production: true
     cluster_name: db-postgresql-sgp1-26078
-    db_name: defaultdb
+    db_name: ashfield_saho
     db_user: doadmin
