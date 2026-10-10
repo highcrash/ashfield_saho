@@ -1,0 +1,6 @@
+# Caddy: HTTPS for the estimator. DOMAIN comes from deploy/.env (e.g. estimate.yourcompany.com)
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3000
+	header -Server
+}

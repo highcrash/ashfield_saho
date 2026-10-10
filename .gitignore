@@ -1,0 +1,9 @@
+# Runtime data: database (client contacts and budgets), uploads, backups
+storage/
+# Secrets
+deploy/.env
+.env
+node_modules/
+*.zip
+Thumbs.db
+.DS_Store

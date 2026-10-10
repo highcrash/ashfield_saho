@@ -1,0 +1,16 @@
+{
+  "name": "smart-home-estimator-server",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Smart Home Estimator: public estimator, admin panel and JSON API. No npm dependencies (uses node:sqlite).",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "seed": "node --disable-warning=ExperimentalWarning seed.js",
+    "import-catalog": "node --disable-warning=ExperimentalWarning seed.js --new-only",
+    "backup": "node --disable-warning=ExperimentalWarning backup.js",
+    "reset-password": "node --disable-warning=ExperimentalWarning reset-password.js"
+  }
+}

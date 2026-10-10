@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Smart Home Estimator</title>
+<meta name="description" content="Plan your smart home room by room and download a budget estimate as a PDF.">
+<meta name="theme-color" content="#0F1B1A">
+<meta property="og:title" content="Smart Home Estimator">
+<meta property="og:description" content="Plan your smart home room by room and download a budget estimate as a PDF.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <button class="brand" data-act="home" aria-label="All projects"><span class="brand-mark"><i></i></span><span>Smart Home Estimator</span></button>
+    <div class="proj-name" id="projName"></div>
+    <div class="total-pill" id="totalPill"></div>
+  </div>
+  <nav class="steps" id="steps" aria-label="Steps"></nav>
+</header>
+<main class="wrap" id="main"><p style="padding:40px 0;color:#5C6B68">Loading…</p></main>
+<footer class="site-foot" id="siteFoot"></footer>
+<div class="bottom" id="bottom"></div>
+<div id="layer"></div>
+<div id="toastHost"></div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+<script src="assets/vendor/jspdf.umd.min.js"></script>
+<script src="assets/vendor/jspdf.plugin.autotable.min.js"></script>
+<script src="assets/js/config.js"></script>
+<script src="data/products.js"></script>
+<!-- On the estimator server this replaces config.js / products.js with the live settings and catalog from the admin panel.
+     On a plain static host it is missing and the two files above are used. -->
+<script src="api/public/bootstrap.js"></script>
+<script src="assets/js/estimate-core.js"></script>
+<script src="assets/js/pdf.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
