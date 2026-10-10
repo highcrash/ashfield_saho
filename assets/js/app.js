@@ -227,13 +227,15 @@ function renderStep3(p){
   const chips=p.rooms.map(r=>`<button class="room-chip ${r.id===ui.roomId?'on':''}" data-act="room" data-id="${r.id}">${esc(r.name)}${r.items.length?`<small>${r.items.length}</small>`:''}</button>`).join('');
   const sug=(SUGGEST[room.type]||SUGGEST.custom).map(id=>PMAP[id]).filter(Boolean)
     .map(pp=>`<button class="sug" data-act="quick" data-pid="${pp.id}">${pp.img?`<img src="${pp.img}" alt="">`:''}${esc(pp.name.replace(' (Black)',''))}</button>`).join('');
+  const canCopy=copySources(p,room).length>0;
   const body=room.items.length?`<div class="items">${room.items.map(itemRow).join('')}</div>`:
-    `<div class="empty"><div class="ill">${ico('box')}</div><h3>No products in ${esc(room.name)} yet</h3><p>Pick a suggestion above, or browse all products by category.</p><button class="btn primary" data-act="picker">${ico('plus')} Add products</button></div>`;
+    `<div class="empty"><div class="ill">${ico('box')}</div><h3>No products in ${esc(room.name)} yet</h3><p>Pick a suggestion above, browse all products by category${canCopy?', or copy the devices from a room you already planned':''}.</p>
+    <div class="empty-btns"><button class="btn primary" data-act="picker">${ico('plus')} Add products</button>${canCopy?`<button class="btn" data-act="copyroom">${ico('copy')} Copy from another room</button>`:''}</div></div>`;
   return `${p.example?exampleBanner():''}<div class="builder">
     <aside class="panel rail" aria-label="Rooms">${rail}<div class="rail-sep"></div><button class="rail-item" data-act="step" data-n="2"><span class="dot" style="background:none">${''}</span><span class="nm muted" style="font-weight:500">${ico('edit')} Edit rooms</span></button></aside>
     <section style="min-width:0"><div class="room-chips">${chips}</div>
     <div class="panel sheet"><div class="sheet-head"><div><div class="eyebrow">${room.type==='whole'?'Hubs, gateways and central control':'Room'}</div><h2>${esc(room.name)}</h2></div>
-      <div class="btns"><button class="btn" data-act="custom">${ico('tag')} Add your own item</button><button class="btn primary" data-act="picker">${ico('plus')} Add products</button></div></div>
+      <div class="btns">${canCopy&&room.items.length?`<button class="btn" data-act="copyroom" title="Copy devices from another room">${ico('copy')} Copy from room</button>`:''}<button class="btn" data-act="custom">${ico('tag')} Add your own item</button><button class="btn primary" data-act="picker">${ico('plus')} Add products</button></div></div>
       <div class="suggest"><span class="lbl">Suggested:</span>${sug}</div>
       ${body}
       <div class="sheet-foot"><span class="muted">${room.items.length} item${room.items.length===1?'':'s'} in this room</span><b class="num">${fmt(roomTotal(room))}</b></div></div>
@@ -331,6 +333,27 @@ function renderCustom(){
       <div style="display:flex;gap:8px"><button class="btn ghost" data-act="closemodal">Cancel</button><button class="btn accent" data-act="savecustom">${m.editId?'Save changes':ico('plus')+' Add item'}</button></div></div>
   </div></div>`;
 }
+// ---------- copy devices from another room ----------
+// Rooms that have products, same room type first (Bedroom 1 → Bedroom 2)
+function copySources(p,target){return p.rooms.filter(r=>r.id!==target.id&&r.items.length).sort((a,b)=>(b.type===target.type)-(a.type===target.type));}
+function renderCopy(){
+  const p=cur(),target=p.rooms.find(r=>r.id===ui.modal.roomId);const src=copySources(p,target);
+  const rows=src.map(r=>{const names=r.items.map(it=>{const l=lineInfo(it);return l?l.name:'';}).filter(Boolean);
+    return `<button class="copy-row" data-act="copyfrom" data-id="${r.id}"><span class="copy-main"><b>${esc(r.name)}</b><span class="muted">${esc(names.slice(0,3).join(', '))}${names.length>3?` and ${names.length-3} more`:''}</span></span>
+      <span class="copy-side"><b class="num">${fmt(roomTotal(r))}</b><small>${r.items.length} item${r.items.length===1?'':'s'}</small></span></button>`;}).join('');
+  return `<div class="scrim" data-act="closemodal" style="z-index:49"></div><div class="modal" role="dialog" aria-modal="true" aria-label="Copy from another room"><div class="modal-card">
+    <div style="display:flex;justify-content:space-between;align-items:center"><h3>Copy devices to ${esc(target.name)}</h3><button class="icon-btn" data-act="closemodal" aria-label="Close">${ico('x')}</button></div>
+    <p class="muted" style="font-size:13.5px;margin-top:-8px">All products and quantities from the room you pick are added to ${esc(target.name)}${target.items.length?' (on top of what is already there)':''}. You can change them afterwards.</p>
+    <div class="copy-list">${rows}</div></div></div>`;}
+function copyRoom(fromId){
+  const p=cur(),target=p.rooms.find(r=>r.id===ui.modal.roomId),src=p.rooms.find(r=>r.id===fromId);if(!target||!src)return;
+  const snap=clone(target.items);
+  src.items.forEach(it=>{
+    const same=!it.custom&&target.items.find(x=>!x.custom&&x.pid===it.pid&&JSON.stringify(x.opt||[])===JSON.stringify(it.opt||[]));
+    if(same){if(it.length!=null)same.length=(+same.length||0)+(+it.length||0);else same.qty=(+same.qty||0)+(+it.qty||0);}
+    else target.items.push(Object.assign(clone(it),{id:uid()}));});
+  ui.modal=null;touch();render();
+  toast(`Copied ${src.items.length} item${src.items.length===1?'':'s'} from ${src.name}`,()=>{const r=cur().rooms.find(x=>x.id===target.id);if(r){r.items=snap;touch();render();}});}
 function renderConfirm(){const m=ui.modal;
   return `<div class="scrim" data-act="closemodal" style="z-index:49"></div><div class="modal" role="alertdialog" aria-modal="true"><div class="modal-card" style="width:min(420px,100%)">
   <h3>${esc(m.title)}</h3><p class="muted">${esc(m.text)}</p><div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" data-act="closemodal">Cancel</button><button class="btn primary" data-act="confirmyes" style="background:var(--danger);border-color:var(--danger)">${esc(m.yes)}</button></div></div></div>`;}
@@ -346,6 +369,7 @@ function renderLayer(){
   const L=$('#layer');
   if(ui.modal&&ui.modal.kind==='custom')L.innerHTML=(ui.picker?renderPicker():'')+renderCustom();
   else if(ui.modal&&ui.modal.kind==='confirm')L.innerHTML=renderConfirm();
+  else if(ui.modal&&ui.modal.kind==='copy')L.innerHTML=renderCopy();
   else if(ui.picker)L.innerHTML=renderPicker();
   else L.innerHTML='';
   document.body.style.overflow=(ui.picker||ui.modal)?'hidden':'';
@@ -457,6 +481,8 @@ document.addEventListener('click',e=>{
     case 'rmitem':{const f=findItem(b.dataset.id);const snap=clone(f.room.items);const nm=(lineInfo(f.it)||{}).name;f.room.items=f.room.items.filter(i=>i.id!==f.it.id);touch();render();
       toast(`Removed ${nm}`,()=>{const r=cur().rooms.find(x=>x.id===f.room.id);if(r){r.items=snap;touch();render();}});break;}
     case 'custom':openCustom();break;
+    case 'copyroom':ui.modal={kind:'copy',roomId:ui.roomId};renderLayer();break;
+    case 'copyfrom':copyRoom(b.dataset.id);break;
     case 'editcustom':openCustom(b.dataset.id);break;
     case 'cuunit':readCustom();ui.modal.data.unit=b.dataset.u;renderLayer();break;
     case 'savecustom':saveCustom();break;

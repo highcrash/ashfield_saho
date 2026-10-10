@@ -327,3 +327,14 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
 .ovr input{width:92px;padding:3px 6px;border-radius:6px;border:1px solid var(--line);background:var(--surface-2);text-align:right;font-weight:600}
 .ovr-note{display:block;font-size:11px;color:var(--muted);margin-top:2px}
 .ovr-note.warn{color:var(--amber);font-weight:600}
+
+/* copy devices from another room */
+.empty-btns{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.copy-list{display:flex;flex-direction:column;gap:8px}
+.copy-row{display:flex;justify-content:space-between;align-items:center;gap:14px;text-align:left;padding:12px 14px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--surface-2);width:100%}
+.copy-row:hover{border-color:var(--accent);background:var(--accent-soft)}
+.copy-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.copy-main .muted{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.copy-side{display:flex;flex-direction:column;align-items:flex-end;white-space:nowrap}
+.copy-side b{font-family:var(--f-display);font-size:14.5px}
+.copy-side small{font-size:12px;color:var(--muted)}
