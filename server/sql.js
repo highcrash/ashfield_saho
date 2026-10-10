@@ -72,14 +72,24 @@ function sqlite(file){
     close:async()=>db.close()};
   return q;}
 
+// Explain a bad DATABASE_URL without printing the password
+function parseDbUrl(raw){
+  const v=String(raw||'').trim().replace(/^["']|["']$/g,'');
+  const hint='Expected postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require';
+  if(v.includes('${'))throw new Error(`DATABASE_URL is the unfilled placeholder "${v.slice(0,40)}". The database is not attached to the app under that name: in the App Spec, add it under "databases:" with the same name (e.g. "db"), or paste the connection string from the database's Connection Details instead. ${hint}`);
+  if(/^\s*PGPASSWORD=|pg_restore|psql\s/.test(v))throw new Error(`DATABASE_URL contains a command, not a connection string. Use the "Connection string" from the database's Connection Details. ${hint}`);
+  let u;try{u=new URL(v);}catch(e){throw new Error(`DATABASE_URL is not a valid URL (starts with "${v.slice(0,13)}…", ${v.length} characters). If the password has special characters they must be URL-encoded. ${hint}`);}
+  if(!/^postgres(ql)?:$/.test(u.protocol))throw new Error(`DATABASE_URL must start with postgresql:// (got "${u.protocol}"). ${hint}`);
+  if(!u.hostname)throw new Error(`DATABASE_URL has no host name. ${hint}`);
+  return u;}
 function postgres(url){
   const {Pool,types}=require('pg');
   types.setTypeParser(20,v=>v==null?null:Number(v));     // BIGINT, COUNT(*) → number
   types.setTypeParser(1700,v=>v==null?null:Number(v));   // NUMERIC (SUM of BIGINT) → number
   // DigitalOcean managed PostgreSQL needs TLS. With its CA certificate (App Platform: ${db.CA_CERT}) the server
   // certificate is verified; without it the connection is still encrypted.
-  const u=new URL(url);u.searchParams.delete('sslmode');
-  const ca=process.env.DATABASE_CA_CERT;
+  const u=parseDbUrl(url);u.searchParams.delete('sslmode');
+  const ca=/BEGIN CERTIFICATE/.test(process.env.DATABASE_CA_CERT||'')?process.env.DATABASE_CA_CERT:null;   // ignore an unfilled ${db.CA_CERT}
   const local=/^(localhost|127\.0\.0\.1)$/.test(u.hostname)&&!process.env.DATABASE_SSL;
   const pool=new Pool({connectionString:u.toString(),max:+process.env.DATABASE_POOL||5,
     ssl:local?false:(ca?{ca,rejectUnauthorized:true}:{rejectUnauthorized:false})});
