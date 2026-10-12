@@ -123,6 +123,25 @@ function projectOut(r,withData){
     admin_notes:r.admin_notes,total:Number(r.total),item_count:Number(r.item_count),rev:Number(r.rev),client_deleted:!!Number(r.client_deleted),
     created:Number(r.created),updated:Number(r.updated),admin_updated:r.admin_updated==null?null:Number(r.admin_updated)};
   if(withData)o.data=J(r.data,null);return o;}
+// Price rule: budgets with status "new" follow the product list — every catalog line gets today's price, except prices
+// the admin typed (it.override). Other statuses keep their prices. Names, photos and details always come from the
+// live catalog (estimate-core lineInfo), whatever the status. Returns {lineId: newPrice} for the lines that changed.
+function followCatalog(p,c){const changed={};
+  p.rooms.forEach(r=>r.items.forEach(it=>{if(it.custom||it.override||!c.PMAP[it.pid])return;const cp=c.catalogPrice(it);
+    if(!Object.prototype.hasOwnProperty.call(it,'price')||(it.price??null)!==(cp??null)){it.price=cp;changed[it.id]=cp;}}));
+  return changed;}
+const anyKeys=o=>Object.keys(o).length>0;
+// After a product change (and on start): bring every "new" budget up to the current prices. Bumps rev so the
+// client's browser picks up the change; leaves "updated" alone so the budgets list order does not jump.
+async function followCatalogAll(){
+  const c=await core();let n=0;
+  for(const r of await q().all("SELECT id,data,rev FROM projects WHERE status='new'")){
+    const p=J(r.data,null);if(!p||!Array.isArray(p.rooms))continue;
+    if(!anyKeys(followCatalog(p,c)))continue;
+    const rev=Number(r.rev)+1;p.rev=rev;
+    const res=await q().run('UPDATE projects SET data=?,total=?,rev=? WHERE id=? AND rev=?',JSON.stringify(p),Math.round(c.projTotal(p)),rev,r.id,Number(r.rev));
+    n+=res.changes?1:0;}
+  return n;}
 // Public save from a client's browser
 async function savePublic(id,token,project){
   if(!PROJECT_ID.test(id))throw new HttpError(400,'Bad project id.');
@@ -132,12 +151,14 @@ async function savePublic(id,token,project){
     const row=await projectRow(id,db);
     if(row&&row.token_hash!==th)throw new HttpError(403,'This project belongs to another browser.');
     const rev=row?Number(row.rev)+1:1;p.rev=rev;
+    // A "new" budget always uses today's prices, even if this browser loaded the catalog before a price change
+    const prices=!row||row.status==='new'?followCatalog(p,s0):{};
     const total=Math.round(s0.projTotal(p)),count=s0.projCount(p);
     const cid=await linkClient(p.client,row&&row.client_id,db);const t=now();
     const v={data:JSON.stringify(p),name:p.name,client_name:clip(p.client.name,120),client_phone:clip(p.client.phone||p.client.whatsapp,40),total,item_count:count,client_id:cid,rev};
     if(row)await db.run(updateSql('projects',Object.assign(v,{client_deleted:0,updated:t}),'id=?'),...Object.values(v),id);
     else{Object.assign(v,{id,token_hash:th,created:t,updated:t});await db.run(insertSql('projects',v),...Object.values(v));}
-    return {rev,total};});
+    return anyKeys(prices)?{rev,total,prices}:{rev,total};});
 }
 async function listForToken(token){
   if(typeof token!=='string'||token.length<16)return [];
@@ -150,16 +171,23 @@ async function saveAdmin(id,body){
   const c0=await core();
   return q().tx(async db=>{
     const row=await projectRow(id,db);if(!row)throw new HttpError(404,'Budget not found.');
-    const set={};const t=now();
-    if(body.data){const p=cleanProject(body.data,id);p.rev=Number(row.rev)+1;p.updated=t;
+    const set={};const t=now();let prices={};
+    if(body.status!=null&&!STATUSES.includes(body.status))throw new HttpError(400,'Unknown status.');
+    const status=body.status??row.status;
+    // Setting a budget back to "new" (or editing one that is "new") brings it to today's prices
+    let data=body.data?cleanProject(body.data,id):(status==='new'&&row.status!=='new'?J(row.data,null):null);
+    if(data&&status==='new')prices=followCatalog(data,c0);
+    if(data&&!body.data&&!anyKeys(prices))data=null;
+    if(data){const p=data;p.rev=Number(row.rev)+1;if(body.data)p.updated=t;
       Object.assign(set,{data:JSON.stringify(p),name:p.name,client_name:clip(p.client.name,120),client_phone:clip(p.client.phone||p.client.whatsapp,40),
-        total:Math.round(c0.projTotal(p)),item_count:c0.projCount(p),rev:p.rev,client_id:await linkClient(p.client,row.client_id,db),admin_updated:t,updated:t});}
-    if(body.status!=null){if(!STATUSES.includes(body.status))throw new HttpError(400,'Unknown status.');set.status=body.status;}
+        total:Math.round(c0.projTotal(p)),item_count:c0.projCount(p),rev:p.rev,client_id:await linkClient(p.client,row.client_id,db)});
+      if(body.data)Object.assign(set,{admin_updated:t,updated:t});}
+    if(body.status!=null)set.status=body.status;
     if(body.admin_notes!=null)set.admin_notes=String(body.admin_notes).slice(0,10000);
     if(body.client_id!==undefined){const cid=body.client_id==null?null:Number(body.client_id);
       if(cid!=null&&!await db.get('SELECT id FROM clients WHERE id=?',cid))throw new HttpError(400,'Client not found.');set.client_id=cid;}
     if(Object.keys(set).length)await db.run(updateSql('projects',set,'id=?'),...Object.values(set),id);
-    return projectOut(await projectRow(id,db),true);});
+    const out=projectOut(await projectRow(id,db),true);if(anyKeys(prices))out.prices=prices;return out;});
 }
 // Re-freeze every catalog line at today's catalog price (all=true also replaces admin overrides)
 async function reprice(id,all){const row=await projectRow(id);if(!row)throw new HttpError(404,'Budget not found.');
@@ -172,4 +200,4 @@ function startSettingsRefresh(ms){setInterval(()=>loadSettings().then(bump).catc
 module.exports={init,q,files,J,now,sha256,STORAGE,UPLOADS,ROOT,HttpError,STATUSES,DEFAULT_SETTINGS,
   getSetting,setSetting,publicSettings,loadSettings,startSettingsRefresh,getCatalog,core,bump,productOut,insertSql,updateSql,
   phoneKey,emailKey,linkClient,updateClient,createClient,clientRow,
-  projectRow,projectOut,savePublic,listForToken,deletePublic,saveAdmin,reprice,summarize,PROJECT_ID};
+  projectRow,projectOut,savePublic,followCatalogAll,listForToken,deletePublic,saveAdmin,reprice,summarize,PROJECT_ID};

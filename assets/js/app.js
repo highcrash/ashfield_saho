@@ -73,20 +73,27 @@ async function flushSync(){
   for(const id of ids){const p=store.projects.find(x=>x.id===id);if(!p)continue;
     try{const r=ADMIN?await fetch('api/admin/projects/'+encodeURIComponent(id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:p})})
         :await fetch('api/public/projects/'+encodeURIComponent(id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token(),project:p})});
-      if(r.ok){const d=await r.json().catch(()=>({}));if(d.rev){p.rev=d.rev;save();}}   // server revision this browser has seen
+      if(r.ok){const d=await r.json().catch(()=>({}));if(d.rev){p.rev=d.rev;save();}   // server revision this browser has seen
+        if(d.prices)applyPrices(p,d.prices);}
       else{ok=false;if(r.status===429||r.status>=500)sync.queue.add(id);}
       if(r.status===401&&ADMIN){toast('Your admin session ended. Sign in again in another tab, then make any change to save.');}}
     catch(e){ok=false;sync.queue.add(id);}}
   setSync(ok?'saved':'error');
   if(sync.queue.size){clearTimeout(sync.t);sync.t=setTimeout(flushSync,15000);}
 }
+// Budgets with status "new" follow the product list: the server sends back today's price for any line that changed
+function applyPrices(p,prices){let n=0;
+  p.rooms.forEach(r=>r.items.forEach(it=>{if(Object.prototype.hasOwnProperty.call(prices,it.id)&&it.price!==prices[it.id]){it.price=prices[it.id];n++;}}));
+  if(!n)return;save();
+  if(cur()===p&&p.step>1&&!ui.picker&&!ui.modal)render();else renderChrome();}
 function setSync(s){sync.state=s;const el=$('#syncState');if(!el)return;
   const t={saving:'Saving…',saved:'Saved',error:'Not saved yet · will retry',idle:'',off:''}[s]||'';
   el.textContent=t;el.className='sync-state '+s;el.hidden=!t;}
 // Pull this browser's projects from the server (picks up changes made by the admin), then push anything newer here.
 // The server bumps `rev` on every save; a higher rev than ours means someone else (the admin) changed it.
+let lastPull=0;
 async function pullServer(){
-  if(!API||ADMIN)return;
+  if(!API||ADMIN)return;lastPull=Date.now();
   try{const r=await fetch('api/public/projects?token='+encodeURIComponent(token()));if(!r.ok)return;const d=await r.json();
     const seen=new Set();let changed=false;
     (d.projects||[]).forEach(sp=>{seen.add(sp.id);const i=store.projects.findIndex(x=>x.id===sp.id);
@@ -97,6 +104,8 @@ async function pullServer(){
     if(changed){save();if(!ui.picker&&!ui.modal)render();}
   }catch(e){}
 }
+// Coming back to the tab after a while: pick up price changes and admin edits made in the meantime
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&Date.now()-lastPull>60000)pullServer();});
 function deleteRemote(p){if(!API||ADMIN)return;
   fetch('api/public/projects/'+encodeURIComponent(p.id),{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token()})}).catch(()=>{});}
 

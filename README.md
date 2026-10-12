@@ -126,9 +126,10 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 | **Settings** | Website name, company name, tagline, phone, WhatsApp, email, website, address, logo, PDF notes, footer and validity, example project, admin password, backups |
 
 **How prices work**
-- Each line in a budget keeps the price it had when the client added it. Changing a product price does not change budgets already made.
-- When a budget has lines whose list price has changed, its page says so. **Update prices** moves the budget to today's prices.
-- A unit price you type yourself (in **Edit in estimator**) is marked as a manual price. **Update prices** leaves it as it is.
+- **Names, descriptions, photos, codes and specs** always come from the product list, so a change shows in every budget and PDF, whatever its status.
+- **Budgets with status New follow the product list.** When you change a price, every New budget is updated straight away, and the client sees the new price the next time they open the site or come back to the tab. A client's browser that still has the old price cannot save it back.
+- **Every other status keeps its prices** (Contacted, Quoted, Won, Lost): the prices are whatever the budget had when it left New. If a list price has changed since, the budget page says so, and **Update prices** moves the budget to today's prices. Setting a budget back to New also updates its prices.
+- **A unit price you type yourself** (in **Edit in estimator**) is marked as a manual price. It is never changed automatically, and **Update prices** leaves it as it is.
 - The product form has a **retail price calculator**: ((Distributor USD × 127) + (net kg × 700)) × 1.5. It only fills the price field; the USD price is never saved or shown to clients.
 
 **What clients see**

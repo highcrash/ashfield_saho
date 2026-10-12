@@ -113,6 +113,7 @@ require('./routes-admin')({route,send,limited});
   await D.init();
   await seedIfEmpty();
   await auth.ensurePassword();
+  const n=await D.followCatalogAll();if(n)console.log(`  Updated prices in ${n} budget(s) with status New`);
   D.startSettingsRefresh();
   const PORT=+process.env.PORT||3000;
   server.listen(PORT,()=>{

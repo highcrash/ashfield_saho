@@ -196,7 +196,7 @@ function renderBudget(){
         <button class="btn" data-act="bpdf" ${C.projCount(p)?'':'disabled'}>${ico('download')} PDF</button>
         <button class="btn" data-act="breprice">${ico('refresh')} Update prices</button>
         <button class="btn ghost danger" data-act="bdelete" aria-label="Delete budget">${ico('trash')}</button></div></div>
-    ${changed?`<div class="note-box" style="margin-bottom:16px">${ico('refresh')}<span>${changed} item${changed>1?'s have':' has'} a different list price now than when ${changed>1?'they were':'it was'} added. The budget keeps the old price until you click <b>Update prices</b>.</span></div>`:''}
+    ${changed&&pr.status!=='new'?`<div class="note-box" style="margin-bottom:16px">${ico('refresh')}<span>${changed} item${changed>1?'s have':' has'} a different list price now than when ${changed>1?'they were':'it was'} added. Because the status is ${esc(STATUS_LABEL[pr.status])}, the budget keeps its prices until you click <b>Update prices</b>.</span></div>`:''}
     <div class="grid2"><div class="stack">
       <div class="panel grand" style="padding:20px"><div class="eyebrow">Estimated budget</div><div class="big num">${fmt(total)}</div>
         <div class="stats"><div><b class="num">${rooms.length}</b>rooms with products</div><div><b class="num">${C.projCount(p)}</b>line items</div>${req?`<div><b class="num">${req}</b>on request</div>`:''}</div></div>
@@ -205,7 +205,8 @@ function renderBudget(){
       ${(p.notes||'').trim()?`<div class="panel card-pad"><h3>Notes on the estimate</h3><p class="muted" style="white-space:pre-wrap">${esc(p.notes)}</p></div>`:''}
     </div><div class="stack">
       <div class="panel card-pad"><h3>Follow-up</h3>
-        <div class="field"><label for="bStatus">Status</label><select class="input" id="bStatus">${STATUS.map(([k,l])=>`<option value="${k}" ${pr.status===k?'selected':''}>${l}</option>`).join('')}</select></div>
+        <div class="field"><label for="bStatus">Status</label><select class="input" id="bStatus">${STATUS.map(([k,l])=>`<option value="${k}" ${pr.status===k?'selected':''}>${l}</option>`).join('')}</select>
+          <span class="hint">${pr.status==='new'?'While the status is New, prices follow the product list automatically.':'Prices are locked at the status change. Product names and photos still update.'}</span></div>
         <div class="field" style="margin-top:12px"><label for="bNotes">Internal notes</label><textarea class="input" id="bNotes" placeholder="Calls, site survey date, discounts discussed… (not shown to the client)">${esc(pr.admin_notes)}</textarea></div>
         <div class="row-end" style="margin-top:10px"><button class="btn primary sm" data-act="bnotes">Save notes</button></div></div>
       <div class="panel card-pad"><h3>Client</h3>${kv([['Name',esc(c.name)],['Phone',esc(c.phone)],['WhatsApp',esc(c.whatsapp)],['Email',esc(c.email)],['Area',esc(c.address)],['Best time',esc(c.contactTime)]])||'<p class="muted">No contact details yet.</p>'}
@@ -247,7 +248,7 @@ async function vClient(id){
 // ---------- products ----------
 function vProducts(q){
   V.pf={group:q.get('group')||'all',q:q.get('q')||'',archived:q.get('archived')==='1'};
-  $('#main').innerHTML=`<div class="sec-head"><div><h2>Products</h2><p>Prices are retail BDT, shown to clients. Changing a price does not change budgets clients already made.</p></div>
+  $('#main').innerHTML=`<div class="sec-head"><div><h2>Products</h2><p>Prices are retail BDT, shown to clients. A new price also updates budgets with status <b>New</b>; other budgets keep their prices. Names, photos and details update everywhere.</p></div>
     <div class="btns"><a class="btn" href="#/categories">${ico('tag')} Categories</a><a class="btn primary" href="#/products/new">${ico('plus')} Add product</a></div></div>
     <div class="toolbar"><div class="tabs" id="pTabs" style="max-width:100%"></div></div>
     <div class="toolbar"><div class="search">${ico('search')}<input class="input" id="pSearch" placeholder="Search name, code, model" value="${esc(V.pf.q)}" autocomplete="off"></div>
@@ -428,7 +429,7 @@ const ACT={
     if(f.options.some(o=>!o.label||!o.choices.length)){toast('Each option needs a name and at least one choice.',true);return;}
     const body=Object.assign({},f,{specs:f.specs.map(s=>s.trim()).filter(Boolean),price:f.options.length?null:f.price,sort:f.sort===''?undefined:+f.sort});
     const d=f.id?await api('PUT','products/'+encodeURIComponent(f.id),body):await api('POST','products',body);
-    setCatalog(d.catalog);toast(f.id?'Product saved':'Product added');
+    setCatalog(d.catalog);toast(f.id?'Product saved'+(d.updatedBudgets?` · prices updated in ${d.updatedBudgets} New budget${d.updatedBudgets>1?'s':''}`:''):'Product added');
     if(!f.id)location.hash='#/products/'+encodeURIComponent(d.id);else{V.form=Object.assign(clone(prod(d.id)),{});vProduct(d.id,new URLSearchParams());}}),
   catmove:b=>run(b,async()=>{const ids=S.catalog.groups.map(g=>g.id);const i=ids.indexOf(b.dataset.id),j=i+(+b.dataset.d);if(j<0||j>=ids.length)return;
     [ids[i],ids[j]]=[ids[j],ids[i]];setCatalog(await api('POST','categories/reorder',{ids}));vCategories();}),
@@ -467,7 +468,9 @@ document.addEventListener('change',async e=>{
   const t=e.target;
   if(t.id==='bDeleted'){V.f.deleted=t.checked;run(null,loadBudgets);}
   else if(t.id==='pArchived'){V.pf.archived=t.checked;renderProductList();}
-  else if(t.id==='bStatus'){run(null,async()=>{const d=await api('PUT','projects/'+encodeURIComponent(V.b.project.id),{status:t.value});V.b.project.status=d.project.status;toast('Status: '+STATUS_LABEL[t.value]);});}
+  else if(t.id==='bStatus'){run(null,async()=>{const d=await api('PUT','projects/'+encodeURIComponent(V.b.project.id),{status:t.value});
+    const n=d.prices?Object.keys(d.prices).length:0;V.b.project=Object.assign(V.b.project,d.project);renderBudget();
+    toast('Status: '+STATUS_LABEL[t.value]+(n?` · ${n} price${n>1?'s':''} updated to the product list`:''));});}
   // Choices changed → rebuild the combination table. Wait for focus to move first, then put it back after the re-render.
   else if(t.matches('[data-oc]')){setTimeout(()=>{const key=focusKey();readProductForm();rebuildVariants();renderProductForm();restoreFocus(key);},0);}
   else if(t.matches('[data-ol]')){readProductForm();}

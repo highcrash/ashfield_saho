@@ -109,7 +109,8 @@ module.exports=function({route,send,limited}){
   route('PUT','/api/admin/products/:id',async(req,res,{params,body})=>{
     if(!await db().get('SELECT id FROM products WHERE id=?',params.id))throw new HttpError(404,'Product not found.');
     const p=await cleanProduct(body);await db().run(D.updateSql('products',p,'id=?'),...Object.values(p),params.id);
-    D.bump();return {id:params.id,catalog:await catalog()};});
+    D.bump();const updatedBudgets=await D.followCatalogAll();   // budgets with status "new" follow the new price
+    return {id:params.id,catalog:await catalog(),updatedBudgets};});
   route('PUT','/api/admin/products/:id/active',async(req,res,{params,body})=>{
     const r=await db().run('UPDATE products SET active=?,updated=? WHERE id=?',body.active?1:0,Date.now(),params.id);
     if(!r.changes)throw new HttpError(404,'Product not found.');D.bump();return catalog();});
@@ -137,7 +138,7 @@ module.exports=function({route,send,limited}){
     const r=await D.projectRow(params.id);if(!r)throw new HttpError(404,'Budget not found.');
     const client=r.client_id?await D.clientRow(r.client_id):null;
     return {project:D.projectOut(r,true),client};});
-  route('PUT','/api/admin/projects/:id',async(req,res,{params,body})=>{const p=await D.saveAdmin(params.id,body);return {ok:true,rev:p.rev,project:p};},{limit:1024*1024});
+  route('PUT','/api/admin/projects/:id',async(req,res,{params,body})=>{const p=await D.saveAdmin(params.id,body);return {ok:true,rev:p.rev,prices:p.prices,project:p};},{limit:1024*1024});
   route('POST','/api/admin/projects/:id/reprice',async(req,res,{params,body})=>({project:await D.reprice(params.id,!!body.all)}));
   route('DELETE','/api/admin/projects/:id',async(req,res,{params})=>{await db().run('DELETE FROM projects WHERE id=?',params.id);return {ok:true};});
 
